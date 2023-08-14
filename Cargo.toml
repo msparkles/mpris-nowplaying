@@ -3,7 +3,12 @@ name = "mpris-nowplaying"
 version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/Mg138/mpris-nowplaying"
+description = "A websocket based MPRIS2 \"now-playing\" / status client."
+readme = "README.md"
 license = "MIT"
+
+categories = ["multimedia"]
+keywords = ["dbus", "mpris", "music", "daemon", "web"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
