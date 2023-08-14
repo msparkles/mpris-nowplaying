@@ -1,5 +1,7 @@
 # mpris-nowplaying
 
+[crates.io](https://crates.io/crates/mpris-nowplaying)
+
 A websocket based [MPRIS2](https://specifications.freedesktop.org/mpris-spec/latest/) "now-playing" / status client.
 
 Main application is embedding a now-playing dock in your streams, but it isn't limited to that.
