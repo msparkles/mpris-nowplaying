@@ -144,9 +144,9 @@
                             }
 
                             if (positionElement) {
-                                let posSeconds = Math.round(data.position / 1_000_000) % 60;
+                                let posSeconds = (Math.round(data.position / 1_000_000) % 60).toString().padStart(2, '0');
                                 let posMinutes = Math.round(data.position / 1_000_000 / 60);
-                                let lenSeconds = Math.round(metadata["length"] / 1_000_000) % 60;
+                                let lenSeconds = (Math.round(metadata["length"] / 1_000_000) % 60).toString().padStart(2, '0');
                                 let lenMinutes = Math.round(metadata["length"] / 1_000_000 / 60);
 
                                 if (posSeconds && lenSeconds) {
