@@ -17,11 +17,18 @@
 
             #np-info {
                 width: 50%;
+
+                display: flex;
+                flex-direction: column;
+            }
+
+            #np-status {
+                padding-block: 1em;
             }
 
             #np-text {
                 text-align: center;
-                height: 60%;
+                height: 100%;
             }
 
             #np-bar {
@@ -50,10 +57,6 @@
                 position: absolute;
             }
 
-            #np-position {
-                margin-top: 2em;
-            }
-
             #np-art {
                 width: 50%;
                 opacity: 0.25;
@@ -72,8 +75,10 @@
                     <p><span id="np-title"></span><span id="np-artist"></span></p>
                     <p id="np-album"></p>
                 </div>
-                <div id="np-bar" hidden>
-                    <div id="np-bar-circle"></div>
+                <div id="np-status" hidden>
+                    <div id="np-bar">
+                        <div id="np-bar-circle"></div>
+                    </div>
                     <p id="np-position"></p>
                 </div>
             </div>
@@ -84,6 +89,7 @@
             let titleElement = document.getElementById("np-title");
             let artistElement = document.getElementById("np-artist");
             let albumElement = document.getElementById("np-album");
+            let statusElement = document.getElementById("np-status");
             let barElement = document.getElementById("np-bar");
             let barCircleElement = document.getElementById("np-bar-circle");
             let positionElement = document.getElementById("np-position");
@@ -126,14 +132,14 @@
                     }
                 }
 
-                if (barElement && barCircleElement) {
+                if (statusElement && barElement && barCircleElement) {
                     if (position && length) {
                         let posPercentage = position / length * 100.0;
 
-                        barElement.hidden = false;
+                        statusElement.hidden = false;
                         barCircleElement.style.left = `${posPercentage}%`;
                     } else {
-                        barElement.hidden = true;
+                        statusElement.hidden = true;
                         barCircleElement.style.left = "0.0%";
                     }
                 }
