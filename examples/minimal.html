@@ -2,69 +2,82 @@
   <html lang="en-US">
     <head>
         <style>
+            :root {
+                font-size: 20px;
+            }
+
             #nowplaying {
-                display: grid;
-                width: 512px;
-                height: 256px;
-                margin-inline: auto;
-                grid-auto-flow: column;
-                grid-template-columns: repeat(2, 1fr);
-                grid-template-rows: repeat(3, 1fr);
-                grid-template-areas:
-                    "a c"
-                    "o c"
-                    "b c";
-                align-items: center;
+                width: 26em;
+                height: 16em;
+
+                display: flex;
+
+                overflow: hidden;
+            }
+
+            #np-info {
+                width: 50%;
             }
 
             #np-text {
-                grid-area: a;
                 text-align: center;
+                height: 60%;
             }
 
             #np-bar {
                 margin-inline: auto;
-                width: 85%;
-                height: 8px;
-                border-radius: 16px;
-                border: solid 4px black;
-                background-color: transparent;
-                position: relative;
+
+                font-size: 0.75em;
+
+                width: 70%;
+                height: 0.5em;
+                border-radius: 1em;
+                border: solid 0.3em black;
+                background-color: #ffffff60;
                 text-align: left;
-                grid-area: b;
+                position: relative;
             }
 
             #np-bar-circle {
                 left: 0%;
                 top: 0;
-                margin: -8px;
-                width: 16px;
-                height: 16px;
+                margin: -0.5em;
+                width: 1em;
+                height: 1em;
                 background-color: yellow;
-                border-radius: 16px;
-                border: solid 4px darkorange;
+                border-radius: 1em;
+                border: solid 0.3em darkorange;
                 position: absolute;
             }
 
+            #np-position {
+                margin-top: 2em;
+            }
+
             #np-art {
-                object-fit: contain;
-                width: 100%;
-                grid-area: c;
+                width: 50%;
+                opacity: 0.25;
+
+                background-size: contain;
+                background-repeat: no-repeat;
+                background-position: center;
             }
         </style>
         <title>MPRIS Now-playing</title>
     </head>
     <body>
         <div id="nowplaying">
-            <div id="np-text">
-                <p><span id="np-title"></span><span id="np-artist"></span></p>
-                <p id="np-album"></p>
+            <div id="np-info">
+                <div id="np-text">
+                    <p><span id="np-title"></span><span id="np-artist"></span></p>
+                    <p id="np-album"></p>
+                </div>
+                <div id="np-bar" hidden>
+                    <div id="np-bar-circle"></div>
+                    <p id="np-position"></p>
+                </div>
             </div>
-            <div id="np-bar" hidden>
-                <div id="np-bar-circle"></div>
-                <p id="np-position"></p>
-            </div>
-            <img id="np-art" src=""/>
+            <div id="np-art"/>
         </div>
 
         <script>
@@ -76,6 +89,84 @@
             let positionElement = document.getElementById("np-position");
             let artElement = document.getElementById("np-art");
 
+            var _data = {};
+
+            function parse(data) {
+                let paused = data?.playbackState == "paused";
+                let position = data?.position;
+                let metadata = data?.metadata;
+
+                let title = metadata?.title;
+                let artist = metadata?.artist;
+                let album = metadata?.album;
+                let length = metadata?.length;
+                let art = metadata?.artwork?.at(0);
+
+                if (titleElement) {
+                    if (title) {
+                        titleElement.textContent = title;
+                    } else {
+                        titleElement.textContent = "Nothing playing!";
+                    }
+                }
+
+                if (artistElement) {
+                    if (artist) {
+                        artistElement.textContent = ` - ${artist}`;
+                    } else {
+                        artistElement.textContent = "";
+                    }
+                }
+
+                if (albumElement) {
+                    if (album) {
+                        albumElement.textContent = `on "${album}"`;
+                    } else {
+                        albumElement.textContent = "";
+                    }
+                }
+
+                if (barElement && barCircleElement) {
+                    if (position && length) {
+                        let posPercentage = position / length * 100.0;
+
+                        barElement.hidden = false;
+                        barCircleElement.style.left = `${posPercentage}%`;
+                    } else {
+                        barElement.hidden = true;
+                        barCircleElement.style.left = "0.0%";
+                    }
+                }
+
+                if (positionElement) {
+                    if (position && length) {
+                        let posSeconds = (Math.round(position / 1_000_000) % 60).toString().padStart(2, '0');
+                        let posMinutes = Math.round(position / 1_000_000 / 60);
+                        let lenSeconds = (Math.round(length / 1_000_000) % 60).toString().padStart(2, '0');
+                        let lenMinutes = Math.round(length / 1_000_000 / 60);
+
+                        var paused_text = "";
+                        if (paused) {
+                            paused_text = " (Paused!)"
+                        };
+
+                        positionElement.textContent = `${posMinutes}:${posSeconds} / ${lenMinutes}:${lenSeconds}` + paused_text;
+                    } else {
+                        positionElement.textContent = "";
+                    }
+                }
+
+                if (artElement) {
+                    if (art) {
+                        let url = art.src;
+
+                        artElement.style.backgroundImage = `url("${url}")`;
+                    } else {
+                        artElement.style.backgroundImage = "";
+                    }
+                }
+            }
+
             function connect() {
                 const ws = new WebSocket("ws://127.0.0.1:32100");
 
@@ -86,6 +177,7 @@
                 ws.onclose = (e) => {
                     console.log('Socket is closed. Reconnect will be attempted in 5 seconds. Reason:', e.reason);
 
+                    _data = {};
                     clearInterval(id);
 
                     setTimeout(function() {
@@ -95,76 +187,13 @@
 
                 ws.onmessage = (e) => {
                     let data = JSON.parse(e.data);
-                    console.debug(data);
-
-                    if (data) {
-                        let metadata = data.metadata;
-
-                        if (metadata) {
-                            if (titleElement) {
-                                let title = metadata.title;
-
-                                if (title) {
-                                    titleElement.textContent = title;
-                                } else {
-                                    titleElement.textContent = "Nothing playing!";
-                                }
-                            }
-
-                            if (artistElement) {
-                                let artist = metadata.artist;
-
-                                if (artist) {
-                                    artistElement.textContent = ` - ${artist}`;
-                                } else {
-                                    artistElement.textContent = "";
-                                }
-                            }
-
-                            if (albumElement) {
-                                let album = metadata.album;
-
-                                if (album) {
-                                    albumElement.textContent = `on "${album}"`;
-                                } else {
-                                    albumElement.textContent = "";
-                                }
-                            }
-
-                            if (barElement && barCircleElement) {
-                                let posPercentage = data.position / metadata["length"] * 100.0;
-
-                                if (posPercentage) {
-                                    barElement.hidden = false;
-
-                                    barCircleElement.style.left = `${posPercentage}%`;
-                                } else {
-                                    barCircleElement.style.left = "0.0%";
-                                }
-                            }
-
-                            if (positionElement) {
-                                let posSeconds = (Math.round(data.position / 1_000_000) % 60).toString().padStart(2, '0');
-                                let posMinutes = Math.round(data.position / 1_000_000 / 60);
-                                let lenSeconds = (Math.round(metadata["length"] / 1_000_000) % 60).toString().padStart(2, '0');
-                                let lenMinutes = Math.round(metadata["length"] / 1_000_000 / 60);
-
-                                if (posSeconds && lenSeconds) {
-                                    positionElement.textContent = `${posMinutes}:${posSeconds} / ${lenMinutes}:${lenSeconds}`;
-                                }
-                            }
-
-                            if (artElement) {
-                                let art = metadata.artwork[0];
-
-                                if (art) {
-                                    artElement.src = art.src;
-                                }
-                            }
-                        }
-                    }
+                    _data = data;
                 };
             }
+
+            setInterval(() => {
+                parse(_data);
+            }, 250);
 
             connect();
         </script>
