@@ -7,7 +7,6 @@ use std::{mem, thread};
 use clap::Parser;
 use env_logger::Env;
 use json::JsonValue;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Instant};
 use tokio_tungstenite::tungstenite::{accept, Message};
@@ -66,7 +65,7 @@ fn find_player(
     app_name: &str,
     finder: &PlayerFinder,
 ) -> Player {
-    let mut times = 0;
+    let mut times: usize = 0;
 
     loop {
         let result = if app_name.is_empty() {
@@ -76,19 +75,17 @@ fn find_player(
         };
 
         if let Ok(found) = result {
-            log::info!("Found a player!");
+            log::info!("Found player \"{}\"!", found.bus_name_player_name_part(),);
             return found;
         }
 
         let times_normalized = times.min(16) as f32 / 16.0;
-
         let try_again_time = lerp(min_retry_time, max_retry_time, times_normalized);
 
-        log::info!("Could not find a currently playing Media Player. Been trying for {} times. Trying again in {try_again_time} seconds.", times + 1);
+        times = times.saturating_add(1);
+        log::info!("Could not find a currently playing media player. Been trying for {} time(s). Trying again in {try_again_time} seconds.", times);
 
         sleep(Duration::from_secs_f32(try_again_time));
-
-        times += 1;
     }
 }
 
@@ -102,7 +99,10 @@ fn handle_status_request(
     while let Ok(reply) = status_rx.try_recv() {
         if !updated {
             *message = read_status_to_message(&player);
-            log::debug!("Message updated.");
+            log::debug!(
+                "Message updated from player {}",
+                player.bus_name_player_name_part()
+            );
 
             if message.is_none() {
                 log::debug!("Could not read status! Aborting message handling.");
@@ -112,8 +112,9 @@ fn handle_status_request(
 
             updated = true;
         }
+
         if reply.send(message.clone().unwrap()).is_err() {
-            log::debug!("Message Receiver disconnected!");
+            log::debug!("Message receiver disconnected!");
         }
     }
 
@@ -245,6 +246,7 @@ async fn main() {
                     sleep(interval - elapsed);
                 }
             }
+
             player = Some(find_player(
                 min_retry_time,
                 max_retry_time,
@@ -266,31 +268,31 @@ async fn main() {
 
     for stream in server.incoming() {
         if let Ok(stream) = stream {
-            let status_tx = UnboundedSender::clone(&status_tx);
+            let status_tx = status_tx.clone();
 
             tokio::spawn(async move {
-                let mut websocket = accept(stream).unwrap();
+                if let Ok(mut websocket) = accept(stream) {
+                    loop {
+                        let msg = websocket.read();
 
-                loop {
-                    let msg = websocket.read();
+                        if let Ok(msg) = msg {
+                            if msg.is_binary() || msg.is_text() {
+                                let (reply_tx, reply_rx) = oneshot::channel();
 
-                    if let Ok(msg) = msg {
-                        if msg.is_binary() || msg.is_text() {
-                            let (reply_tx, reply_rx) = oneshot::channel();
+                                let _ = status_tx.send(reply_tx);
+                                log::debug!("Attempting to ask for a new Message.");
 
-                            status_tx.send(reply_tx).unwrap();
-                            log::debug!("Attempting to ask for a new Message.");
-
-                            if let Ok(Ok(status)) = timeout(time_out_duration, reply_rx).await {
-                                log::debug!("Message reply got.");
-                                websocket.send(status).unwrap();
-                            } else {
-                                log::debug!("Message reply timed out.");
-                                break;
+                                if let Ok(Ok(status)) = timeout(time_out_duration, reply_rx).await {
+                                    log::debug!("Message reply got.");
+                                    let _ = websocket.send(status);
+                                } else {
+                                    log::debug!("Message reply timed out.");
+                                    break;
+                                }
                             }
+                        } else {
+                            break;
                         }
-                    } else {
-                        break;
                     }
                 }
             });
