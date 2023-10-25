@@ -1,6 +1,6 @@
 [package]
 name = "mpris-nowplaying"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 repository = "https://github.com/msparkles/mpris-nowplaying"
 description = "A websocket based MPRIS2 \"now-playing\" / status client."
