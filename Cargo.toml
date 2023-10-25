@@ -2,7 +2,7 @@
 name = "mpris-nowplaying"
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/Mg138/mpris-nowplaying"
+repository = "https://github.com/msparkles/mpris-nowplaying"
 description = "A websocket based MPRIS2 \"now-playing\" / status client."
 readme = "README.md"
 license = "MIT"
