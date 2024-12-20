@@ -1,207 +1,214 @@
 <!DOCTYPE html>
 <html lang="en-US">
-
-<head>
+  <head>
     <style>
-        :root {
-            font-size: 20px;
-        }
+      :root {
+        font-size: 20px;
+      }
 
-        #nowplaying {
-            width: 26em;
-            height: 16em;
+      #nowplaying {
+        width: 26em;
+        height: 16em;
 
-            display: flex;
+        display: flex;
 
-            overflow: hidden;
-        }
+        overflow: hidden;
+      }
 
-        #np-info {
-            width: 50%;
+      #np-info {
+        width: 50%;
 
-            display: flex;
-            flex-direction: column;
+        display: flex;
+        flex-direction: column;
 
-            padding: 1em;
-        }
+        padding: 1em;
+      }
 
-        #np-text {
-            text-align: center;
-            height: 100%;
-        }
+      #np-text {
+        text-align: center;
+        height: 100%;
+      }
 
-        #np-bar {
-            margin-inline: auto;
+      #np-bar {
+        margin-inline: auto;
 
-            font-size: 0.75em;
+        font-size: 0.75em;
 
-            height: 0.5em;
-            border-radius: 1em;
-            border: solid 0.3em black;
-            background-color: #ffffff60;
-            text-align: left;
-            position: relative;
-        }
+        height: 0.5em;
+        border-radius: 1em;
+        border: solid 0.3em black;
+        background-color: #ffffff60;
+        text-align: left;
+        position: relative;
+      }
 
-        #np-bar-circle {
-            left: 0%;
-            top: 0;
-            margin: -0.5em;
-            width: 1em;
-            height: 1em;
-            background-color: yellow;
-            border-radius: 1em;
-            border: solid 0.3em darkorange;
-            position: absolute;
-        }
+      #np-bar-circle {
+        left: 0%;
+        top: 0;
+        margin: -0.5em;
+        width: 1em;
+        height: 1em;
+        background-color: yellow;
+        border-radius: 1em;
+        border: solid 0.3em darkorange;
+        position: absolute;
+      }
 
-        #np-art {
-            width: 50%;
-            opacity: 0.5;
+      #np-art {
+        width: 50%;
+        opacity: 0.5;
 
-            background-size: contain;
-            background-repeat: no-repeat;
-            background-position: center;
-        }
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+      }
     </style>
     <title>MPRIS Now-playing</title>
-</head>
+  </head>
 
-<body>
+  <body>
     <div id="nowplaying">
-        <div id="np-info">
-            <div id="np-text">
-                <p><span id="np-title"></span><span id="np-artist"></span></p>
-                <p id="np-album"></p>
-            </div>
-            <div id="np-status" hidden>
-                <div id="np-bar">
-                    <div id="np-bar-circle"></div>
-                </div>
-                <p id="np-position"></p>
-            </div>
+      <div id="np-info">
+        <div id="np-text">
+          <p><span id="np-title"></span><span id="np-artist"></span></p>
+          <p id="np-album"></p>
         </div>
-        <div id="np-art" />
+        <div id="np-status" hidden>
+          <div id="np-bar">
+            <div id="np-bar-circle"></div>
+          </div>
+          <p id="np-position"></p>
+        </div>
+      </div>
+      <div id="np-art" />
     </div>
 
     <script>
-        let titleElement = document.getElementById("np-title");
-        let artistElement = document.getElementById("np-artist");
-        let albumElement = document.getElementById("np-album");
-        let statusElement = document.getElementById("np-status");
-        let barElement = document.getElementById("np-bar");
-        let barCircleElement = document.getElementById("np-bar-circle");
-        let positionElement = document.getElementById("np-position");
-        let artElement = document.getElementById("np-art");
+      let titleElement = document.getElementById("np-title");
+      let artistElement = document.getElementById("np-artist");
+      let albumElement = document.getElementById("np-album");
+      let statusElement = document.getElementById("np-status");
+      let barElement = document.getElementById("np-bar");
+      let barCircleElement = document.getElementById("np-bar-circle");
+      let positionElement = document.getElementById("np-position");
+      let artElement = document.getElementById("np-art");
 
-        var _data = {};
+      var _data = {};
 
-        function parse(data) {
-            let paused = data?.playbackState == "paused";
-            let position = data?.position;
-            let metadata = data?.metadata;
+      function parse(data) {
+        let paused = data?.playbackState == "paused";
+        let position = data?.position;
+        let metadata = data?.metadata;
 
-            let title = metadata?.title;
-            let artist = metadata?.artist;
-            let album = metadata?.album;
-            let length = metadata?.length;
-            let art = metadata?.artwork?.at(0);
+        let title = metadata?.title;
+        let artist = metadata?.artist;
+        let album = metadata?.album;
+        let length = metadata?.length;
+        let art = metadata?.artwork?.at(0);
 
-            if (titleElement) {
-                if (title) {
-                    titleElement.textContent = title;
-                } else {
-                    titleElement.textContent = "Nothing playing!";
-                }
-            }
-
-            if (artistElement) {
-                if (artist) {
-                    artistElement.textContent = ` - ${artist}`;
-                } else {
-                    artistElement.textContent = "";
-                }
-            }
-
-            if (albumElement) {
-                if (album) {
-                    albumElement.textContent = `on "${album}"`;
-                } else {
-                    albumElement.textContent = "";
-                }
-            }
-
-            if (statusElement && barElement && barCircleElement) {
-                if (position && length) {
-                    let posPercentage = position / length * 100.0;
-
-                    statusElement.hidden = false;
-                    barCircleElement.style.left = `${posPercentage}%`;
-                } else {
-                    statusElement.hidden = true;
-                    barCircleElement.style.left = "0.0%";
-                }
-            }
-
-            if (positionElement) {
-                if (position && length) {
-                    let posSeconds = (Math.round(position / 1_000_000) % 60).toString().padStart(2, '0');
-                    let posMinutes = Math.round(position / 1_000_000 / 60);
-                    let lenSeconds = (Math.round(length / 1_000_000) % 60).toString().padStart(2, '0');
-                    let lenMinutes = Math.round(length / 1_000_000 / 60);
-
-                    var paused_text = "";
-                    if (paused) {
-                        paused_text = " (Paused!)"
-                    };
-
-                    positionElement.textContent = `${posMinutes}:${posSeconds} / ${lenMinutes}:${lenSeconds}` + paused_text;
-                } else {
-                    positionElement.textContent = "";
-                }
-            }
-
-            if (artElement) {
-                if (art) {
-                    let url = art.src;
-
-                    artElement.style.backgroundImage = `url("${url}")`;
-                } else {
-                    artElement.style.backgroundImage = "";
-                }
-            }
+        if (titleElement) {
+          if (title) {
+            titleElement.textContent = title;
+          } else {
+            titleElement.textContent = "Nothing playing!";
+          }
         }
 
-        function connect() {
-            const ws = new WebSocket("ws://127.0.0.1:32100");
-
-            let id = setInterval(() => {
-                ws.send(null);
-            }, 500);
-
-            ws.onclose = (e) => {
-                console.log('Socket is closed. Reconnect will be attempted in 5 seconds. Reason:', e.reason);
-
-                _data = {};
-                clearInterval(id);
-
-                setTimeout(function () {
-                    connect();
-                }, 5000);
-            };
-
-            ws.onmessage = (e) => {
-                let data = JSON.parse(e.data);
-                _data = data;
-            };
+        if (artistElement) {
+          if (artist) {
+            artistElement.textContent = ` - ${artist}`;
+          } else {
+            artistElement.textContent = "";
+          }
         }
 
-        setInterval(() => {
-            parse(_data);
-        }, 250);
+        if (albumElement) {
+          if (album) {
+            albumElement.textContent = `on "${album}"`;
+          } else {
+            albumElement.textContent = "";
+          }
+        }
 
-        connect();
+        if (statusElement && barElement && barCircleElement) {
+          if (position && length) {
+            let posPercentage = (position / length) * 100.0;
+
+            statusElement.hidden = false;
+            barCircleElement.style.left = `${posPercentage}%`;
+          } else {
+            statusElement.hidden = true;
+            barCircleElement.style.left = "0.0%";
+          }
+        }
+
+        if (positionElement) {
+          if (position && length) {
+            let posSeconds = (Math.round(position / 1_000_000) % 60)
+              .toString()
+              .padStart(2, "0");
+            let posMinutes = Math.floor(position / 1_000_000 / 60);
+            let lenSeconds = (Math.round(length / 1_000_000) % 60)
+              .toString()
+              .padStart(2, "0");
+            let lenMinutes = Math.floor(length / 1_000_000 / 60);
+
+            var paused_text = "";
+            if (paused) {
+              paused_text = " (Paused!)";
+            }
+
+            positionElement.textContent =
+              `${posMinutes}:${posSeconds} / ${lenMinutes}:${lenSeconds}` +
+              paused_text;
+          } else {
+            positionElement.textContent = "";
+          }
+        }
+
+        if (artElement) {
+          if (art) {
+            let url = art.src;
+
+            artElement.style.backgroundImage = `url("${url}")`;
+          } else {
+            artElement.style.backgroundImage = "";
+          }
+        }
+      }
+
+      function connect() {
+        const ws = new WebSocket("ws://127.0.0.1:32100");
+
+        let id = setInterval(() => {
+          ws.send(null);
+        }, 500);
+
+        ws.onclose = (e) => {
+          console.log(
+            "Socket is closed. Reconnect will be attempted in 5 seconds. Reason:",
+            e.reason
+          );
+
+          _data = {};
+          clearInterval(id);
+
+          setTimeout(function () {
+            connect();
+          }, 5000);
+        };
+
+        ws.onmessage = (e) => {
+          let data = JSON.parse(e.data);
+          _data = data;
+        };
+      }
+
+      setInterval(() => {
+        parse(_data);
+      }, 250);
+
+      connect();
     </script>
-</body>
-
+  </body>
 </html>
