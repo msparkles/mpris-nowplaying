@@ -81,6 +81,7 @@ struct StatusMetadata {
     playback_state: PlaybackState,
     title: String,
     artist: String,
+    album: String,
     artwork: Vec<ArtworkInfo>,
     length: u64,
 }
@@ -137,6 +138,7 @@ fn read_status(player: &mpris::Player) -> Option<PlayerStatus> {
             playback_state: playback_status.into(),
             title: metadata.title().unwrap_or_default().to_string(),
             artist: metadata.artists().unwrap_or_default().join(", "),
+            album: metadata.album_name().unwrap_or_default().to_string(),
             artwork: vec![ArtworkInfo {
                 src: metadata.art_url().unwrap_or_default().to_string(),
             }],

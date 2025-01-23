@@ -32,6 +32,7 @@ The JSON looks roughly like:
         playbackState: "playing" | "paused" | "none",
         title: string,
         artist: string,
+        album: string,
         artwork: {
             src: string, // whatever the music app returns, can be a local path
         }[],
