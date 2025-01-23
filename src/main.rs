@@ -78,7 +78,6 @@ struct ArtworkInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusMetadata {
-    playback_state: PlaybackState,
     title: String,
     artist: String,
     album: String,
@@ -90,6 +89,7 @@ struct StatusMetadata {
 #[serde(rename_all = "camelCase")]
 struct PlayerStatus {
     metadata: StatusMetadata,
+    playback_state: PlaybackState,
     position: u64,
 }
 
@@ -135,7 +135,6 @@ fn read_status(player: &mpris::Player) -> Option<PlayerStatus> {
 
     Some(PlayerStatus {
         metadata: StatusMetadata {
-            playback_state: playback_status.into(),
             title: metadata.title().unwrap_or_default().to_string(),
             artist: metadata.artists().unwrap_or_default().join(", "),
             album: metadata.album_name().unwrap_or_default().to_string(),
@@ -144,6 +143,7 @@ fn read_status(player: &mpris::Player) -> Option<PlayerStatus> {
             }],
             length: metadata.length_in_microseconds().unwrap_or_default(),
         },
+        playback_state: playback_status.into(),
         position: player.get_position_in_microseconds().unwrap_or_default(),
     })
 }

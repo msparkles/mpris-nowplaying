@@ -27,9 +27,8 @@ The returned message from the bound WebSocket address is similar to that of a [M
 The JSON looks roughly like:
 
 ```
-"mediaSession": {
-    "metadata": {
-        playbackState: "playing" | "paused" | "none",
+mediaSession: {
+    metadata: {
         title: string,
         artist: string,
         album: string,
@@ -38,7 +37,8 @@ The JSON looks roughly like:
         }[],
         length: u64, // unit: microseconds, the media's length in time
     }
-    "position": u64 // unit: microseconds, the current playback position
+    playbackState: "playing" | "paused" | "none",
+    position: u64 // unit: microseconds, the current playback position
 }
 ```
 
