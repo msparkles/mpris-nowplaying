@@ -1,15 +1,11 @@
-use mpris::{PlaybackStatus, Player, PlayerFinder};
-use std::net::TcpListener;
-use std::thread::sleep;
-use std::time::Duration;
-use std::{mem, thread};
-
 use clap::Parser;
 use env_logger::Env;
-use json::JsonValue;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::{timeout, Instant};
-use tokio_tungstenite::tungstenite::{accept, Message};
+use serde::{Deserialize, Serialize};
+use std::net::TcpListener;
+use std::time::Duration;
+use std::{fs, mem, thread};
+use tokio::sync::watch;
+use tokio_tungstenite::tungstenite::{accept, Message, Utf8Bytes};
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + t * (b - a)
@@ -47,134 +43,140 @@ struct Args {
     #[arg(short, long, default_value_t = 0.25)]
     interval: f32,
 
-    /// The maximum amount of time, in seconds, to wait for the player status.
-    ///
-    /// If the WebSocket thread cannot get the player status in time (likely due to no player being present), it will send null instead.
-    #[arg(short, long, default_value_t = 0.5)]
-    time_out: f32,
-
     /// The app name to look for. Leave blank to search for a player automatically.
     #[arg(short, long, default_value_t = String::from(""))]
     app_name: String,
 }
 
-/// NOTE: Blocks the thread.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PlaybackState {
+    /// A track is currently playing.
+    Playing,
+    /// A track is currently paused.
+    Paused,
+    /// There is no track currently playing.
+    None,
+}
+
+impl From<mpris::PlaybackStatus> for PlaybackState {
+    fn from(value: mpris::PlaybackStatus) -> Self {
+        match value {
+            mpris::PlaybackStatus::Playing => Self::Playing,
+            mpris::PlaybackStatus::Paused => Self::Paused,
+            mpris::PlaybackStatus::Stopped => Self::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtworkInfo {
+    src: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusMetadata {
+    playback_state: PlaybackState,
+    title: String,
+    artist: String,
+    artwork: Vec<ArtworkInfo>,
+    length: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlayerStatus {
+    metadata: StatusMetadata,
+    position: u64,
+}
+
+thread_local! {
+    static PLAYER_FINDER: mpris::PlayerFinder = mpris::PlayerFinder::new().expect("could not connect to D-Bus!");
+}
+
 fn find_player(
+    times_tried: &mut u32,
     min_retry_time: f32,
     max_retry_time: f32,
     app_name: &str,
-    finder: &PlayerFinder,
-) -> Player {
-    let mut times: usize = 0;
+    current_player: Option<&mpris::Player>,
+) -> Result<mpris::Player, Duration> {
+    let result = if app_name.is_empty() {
+        PLAYER_FINDER.with(|finder| finder.find_active())
+    } else {
+        PLAYER_FINDER.with(|finder| finder.find_by_name(app_name))
+    };
 
-    loop {
-        let result = if app_name.is_empty() {
-            finder.find_active()
-        } else {
-            finder.find_by_name(app_name)
-        };
-
-        if let Ok(found) = result {
-            log::info!("Found player \"{}\"!", found.bus_name_player_name_part(),);
-            return found;
+    if let Ok(found) = result {
+        if Some(found.bus_name()) == current_player.map(|v| v.bus_name()) {
+            return Err(Duration::from_secs_f32(min_retry_time));
         }
 
-        let times_normalized = times.min(16) as f32 / 16.0;
-        let try_again_time = lerp(min_retry_time, max_retry_time, times_normalized);
-
-        times = times.saturating_add(1);
-        log::info!("Could not find a currently playing media player. Been trying for {} time(s). Trying again in {try_again_time} seconds.", times);
-
-        sleep(Duration::from_secs_f32(try_again_time));
+        return Ok(found);
     }
+
+    let times_normalized = (*times_tried).min(16) as f32 / 16.0;
+    let try_again_time = lerp(min_retry_time, max_retry_time, times_normalized);
+
+    *times_tried = times_tried.saturating_add(1);
+    log::info!("Could not find a currently playing media player. Been trying for {} time(s). Trying again in {try_again_time} seconds.", times_tried);
+
+    Err(Duration::from_secs_f32(try_again_time))
+}
+
+fn read_status(player: &mpris::Player) -> Option<PlayerStatus> {
+    let (playback_status, metadata) = player
+        .get_playback_status()
+        .ok()
+        .zip(player.get_metadata().ok())?;
+
+    Some(PlayerStatus {
+        metadata: StatusMetadata {
+            playback_state: playback_status.into(),
+            title: metadata.title().unwrap_or_default().to_string(),
+            artist: metadata.artists().unwrap_or_default().join(", "),
+            artwork: vec![ArtworkInfo {
+                src: metadata.art_url().unwrap_or_default().to_string(),
+            }],
+            length: metadata.length_in_microseconds().unwrap_or_default(),
+        },
+        position: player.get_position_in_microseconds().unwrap_or_default(),
+    })
 }
 
 fn handle_status_request(
-    player: &Player,
-    message: &mut Option<Message>,
-    status_rx: &mut mpsc::UnboundedReceiver<oneshot::Sender<Message>>,
+    player: Option<&mpris::Player>,
+    status_tx: &mut watch::Sender<Option<PlayerStatus>>,
 ) -> bool {
-    let mut updated = false;
+    let Some(player) = player else {
+        return false;
+    };
 
-    while let Ok(reply) = status_rx.try_recv() {
-        if !updated {
-            *message = read_status_to_message(&player);
-            log::debug!(
-                "Message updated from player {}",
-                player.bus_name_player_name_part()
-            );
+    if let Some(status) = read_status(player) {
+        log::debug!(
+            "Updated from player {}.",
+            player.bus_name_player_name_part()
+        );
 
-            if message.is_none() {
-                log::debug!("Could not read status! Aborting message handling.");
+        if status_tx.send(Some(status)).is_err() {
+            log::info!("Player status isn't being requested anymore(all connections dropped)! Pausing updates.");
 
-                return player.is_running();
-            }
-
-            updated = true;
+            return true;
         }
+    } else {
+        status_tx.send(None).unwrap();
+        log::info!("Could not read player status...");
 
-        if reply.send(message.clone().unwrap()).is_err() {
-            log::debug!("Message receiver disconnected!");
+        if !player.is_running() {
+            log::info!("Player is not running! Aborting updates.");
+
+            return true;
         }
     }
 
-    true
-}
-
-fn read_status_to_message(player: &Player) -> Option<Message> {
-    if let Some((playback_status, metadata)) = player
-        .get_playback_status()
-        .ok()
-        .zip(player.get_metadata().ok())
-    {
-        let mut json = JsonValue::new_object();
-
-        {
-            match playback_status {
-                PlaybackStatus::Playing => json.insert("playbackState", "playing").unwrap(),
-                PlaybackStatus::Paused => json.insert("playbackState", "paused").unwrap(),
-                PlaybackStatus::Stopped => json.insert("playbackState", "none").unwrap(),
-            }
-        }
-
-        {
-            let mut m = JsonValue::new_object();
-
-            if let Some(title) = metadata.title() {
-                m.insert("title", title).unwrap();
-            }
-            if let Some(artists) = metadata.artists() {
-                m.insert("artist", artists.join(", ")).unwrap();
-            }
-            if let Some(album) = metadata.album_name() {
-                m.insert("album", album).unwrap();
-            }
-            if let Some(art_url) = metadata.art_url() {
-                let mut art_array = JsonValue::new_array();
-
-                let mut art_json = JsonValue::new_object();
-                art_json.insert("src", art_url).unwrap();
-
-                art_array.push(art_json).unwrap();
-
-                m.insert("artwork", art_array).unwrap();
-            }
-
-            if let Some(length) = metadata.length_in_microseconds() {
-                m.insert("length", length).unwrap();
-            }
-
-            json.insert("metadata", m).unwrap();
-        }
-
-        if let Some(position) = player.get_position_in_microseconds().ok() {
-            json.insert("position", position).unwrap();
-        }
-
-        return Some(Message::Text(json.to_string()));
-    }
-
-    None
+    false
 }
 
 #[tokio::main]
@@ -216,86 +218,123 @@ async fn main() {
         env_logger::Builder::from_env(env).init();
     }
 
-    let interval = Duration::from_secs_f32(args.interval);
-    let min_retry_time = args.min_retry_time;
-    let max_retry_time = args.max_retry_time;
-    let app_name = args.app_name;
-    let (status_tx, status_rx) = mpsc::unbounded_channel::<oneshot::Sender<Message>>();
+    let (status_tx, status_rx) = watch::channel::<Option<PlayerStatus>>(None);
 
-    thread::spawn(move || {
-        let finder = PlayerFinder::new().expect("could not connect to D-Bus!");
+    {
+        let min_retry_time = args.min_retry_time;
+        let max_retry_time = args.max_retry_time;
+        let app_name = args.app_name;
+        let update_interval = Duration::from_secs_f32(args.interval);
 
-        let mut status_rx = status_rx;
+        thread::spawn(move || {
+            let mut status_tx = status_tx;
 
-        let mut message: Option<Message> = None;
-        let mut player: Option<Player> = None;
+            let mut player: Option<mpris::Player> = None;
+            let mut times_tried = 0;
 
-        loop {
-            while let Some(p) = &player {
-                // TODO this is an amateur attempt
-
-                let start = Instant::now();
-                if !handle_status_request(p, &mut message, &mut status_rx) {
-                    log::info!("Player is not running! Retrying connection.");
-
+            loop {
+                if handle_status_request(player.as_ref(), &mut status_tx) {
                     player = None;
-                }
-                let elapsed = Instant::now() - start;
+                };
 
-                if interval > elapsed {
-                    sleep(interval - elapsed);
-                }
-            }
-
-            player = Some(find_player(
-                min_retry_time,
-                max_retry_time,
-                &app_name,
-                &finder,
-            ));
-        }
-    });
-
-    let server = TcpListener::bind(&args.ip).expect(
-        format!(
-            "could not bind to ip {}! specify a free address with --ip",
-            &args.ip
-        )
-        .as_str(),
-    );
-
-    let time_out_duration = Duration::from_secs_f32(args.time_out);
-
-    for stream in server.incoming() {
-        if let Ok(stream) = stream {
-            let status_tx = status_tx.clone();
-
-            tokio::spawn(async move {
-                if let Ok(mut websocket) = accept(stream) {
-                    loop {
-                        let msg = websocket.read();
-
-                        if let Ok(msg) = msg {
-                            if msg.is_binary() || msg.is_text() {
-                                let (reply_tx, reply_rx) = oneshot::channel();
-
-                                let _ = status_tx.send(reply_tx);
-                                log::debug!("Attempting to ask for a new Message.");
-
-                                if let Ok(Ok(status)) = timeout(time_out_duration, reply_rx).await {
-                                    log::debug!("Message reply got.");
-                                    let _ = websocket.send(status);
-                                } else {
-                                    log::debug!("Message reply timed out.");
-                                    break;
-                                }
-                            }
-                        } else {
-                            break;
+                match find_player(
+                    &mut times_tried,
+                    min_retry_time,
+                    max_retry_time,
+                    &app_name,
+                    player.as_ref(),
+                ) {
+                    Ok(new_player) => {
+                        log::info!(
+                            "Found new player \"{} ({})\"!",
+                            new_player.bus_name_player_name_part(),
+                            new_player.bus_name()
+                        );
+                        player = Some(new_player);
+                        times_tried = 0;
+                    }
+                    Err(duration) => {
+                        if player.is_none() {
+                            thread::sleep(duration);
                         }
                     }
                 }
-            });
+
+                thread::sleep(update_interval);
+            }
+        });
+    }
+
+    {
+        let listener = TcpListener::bind(&args.ip).unwrap_or_else(|_| {
+            panic!(
+                "could not bind to ip {}! specify a free address with --ip",
+                &args.ip
+            )
+        });
+
+        log::info!("Bound to ip {}!", args.ip);
+
+        loop {
+            let Ok((stream, _)) = listener.accept() else {
+                continue;
+            };
+
+            if let Ok(mut ws_stream) = accept(stream) {
+                let status_rx = status_rx.clone();
+
+                tokio::spawn(async move {
+                    let mut current_artwork = None;
+
+                    loop {
+                        let Ok(msg) = ws_stream.read() else {
+                            break;
+                        };
+
+                        if let Ok(req) = msg.into_text().as_ref().map(Utf8Bytes::as_str) {
+                            if let Some(status) = status_rx.borrow().as_ref() {
+                                if let Some(artwork_index) = req.strip_prefix("artwork/") {
+                                    let Ok(index) = str::parse::<usize>(artwork_index) else {
+                                        continue;
+                                    };
+
+                                    if let Some(artwork) = status.metadata.artwork.get(index) {
+                                        if Some(artwork) != current_artwork.as_ref() {
+                                            current_artwork = Some(artwork.clone());
+
+                                            if let Some(path) =
+                                                artwork.src.as_str().strip_prefix("file://")
+                                            {
+                                                let _ = ws_stream.send(Message::Binary(
+                                                    fs::read(path).unwrap().into(),
+                                                ));
+
+                                                continue;
+                                            } else {
+                                                let _ = ws_stream.send(Message::Text(
+                                                    artwork.src.clone().into(),
+                                                ));
+                                                continue;
+                                            }
+                                        } else {
+                                            let _ = ws_stream.send(Message::Text("null".into()));
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    let _ = ws_stream.send(Message::Text(
+                                        serde_json::to_string(&status).unwrap().into(),
+                                    ));
+                                    continue;
+                                }
+                            } else {
+                                let _ = ws_stream.send(Message::Text("null".into()));
+                                continue;
+                            }
+                        }
+                    }
+                });
+            }
         }
     }
 }

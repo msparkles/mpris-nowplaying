@@ -24,13 +24,23 @@ Look in `/examples`.
 
 The returned message from the bound WebSocket address is similar to that of a [Media Session](https://developer.mozilla.org/en-US/docs/Web/API/MediaSession) JSON.
 
-However, there's some additional information: (only marking additions!)
+The JSON looks roughly like:
 
 ```
 "mediaSession": {
     "metadata": {
-        "length": u64, // unit: microseconds, the media's length in time
+        playbackState: "playing" | "paused" | "none",
+        title: string,
+        artist: string,
+        artwork: {
+            src: string, // whatever the music app returns, can be a local path
+        }[],
+        length: u64, // unit: microseconds, the media's length in time
     }
     "position": u64 // unit: microseconds, the current playback position
 }
 ```
+
+You can get it from the websocket stream by default without sending anything special.
+
+If you send in `artwork/<index>`, the server will respond with the artwork image blob at the index if it is a local file, or the remote link itself, or `null` if it's been requested already and there isn't a new one.

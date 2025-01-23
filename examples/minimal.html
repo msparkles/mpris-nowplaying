@@ -64,38 +64,129 @@
       }
     </style>
     <title>MPRIS Now-playing</title>
-  </head>
-
-  <body>
-    <div id="nowplaying">
-      <div id="np-info">
-        <div id="np-text">
-          <p><span id="np-title"></span><span id="np-artist"></span></p>
-          <p id="np-album"></p>
-        </div>
-        <div id="np-status" hidden>
-          <div id="np-bar">
-            <div id="np-bar-circle"></div>
-          </div>
-          <p id="np-position"></p>
-        </div>
-      </div>
-      <div id="np-art" />
-    </div>
 
     <script>
-      let titleElement = document.getElementById("np-title");
-      let artistElement = document.getElementById("np-artist");
-      let albumElement = document.getElementById("np-album");
-      let statusElement = document.getElementById("np-status");
-      let barElement = document.getElementById("np-bar");
-      let barCircleElement = document.getElementById("np-bar-circle");
-      let positionElement = document.getElementById("np-position");
-      let artElement = document.getElementById("np-art");
+      const ADDRESS = "ws://127.0.0.1:32100";
 
-      var _data = {};
+      class WebsocketWrapper {
+        ws = undefined;
+        data = null;
 
-      function parse(data) {
+        interval = undefined;
+        intervalId = undefined;
+
+        update;
+        filter;
+
+        connect() {
+          const ws = new WebSocket(ADDRESS);
+
+          ws.onclose = (e) => {
+            console.log(
+              "Socket is closed. Reconnect will be attempted in 5 seconds. Reason:",
+              e.reason
+            );
+
+            this.delete();
+
+            setTimeout(this.connect, 5000);
+          };
+
+          ws.onmessage = (e) => {
+            if (!e.data) {
+              this.data = null;
+              return;
+            }
+
+            let data = null;
+
+            if (typeof e.data == "object") {
+              data = e.data;
+            } else {
+              try {
+                data = JSON.parse(e.data);
+              } catch {
+                data = e.data;
+              }
+            }
+
+            if (this.filter(data)) {
+              this.data = data;
+            }
+          };
+
+          this.ws = ws;
+        }
+
+        delete() {
+          this.ws = undefined;
+          clearInterval(this.intervalId);
+          this.intervalId = undefined;
+          this.data = {};
+        }
+
+        constructor(
+          update = (ws, data) => {},
+          interval = 1000,
+          filter = (data) => true
+        ) {
+          this.update = update;
+          this.filter = filter;
+          this.interval = interval;
+
+          this.intervalId = setInterval(() => {
+            if (this.ws?.readyState === WebSocket.OPEN) {
+              this.update(this.ws, this.data);
+            }
+          }, this.interval);
+
+          this.connect();
+        }
+      }
+    </script>
+
+    <script>
+      let imageFetcher = undefined;
+      let imageUrl = undefined;
+      let currentImage = undefined;
+
+      function applyStatus(data, elements) {
+        if (!imageFetcher) {
+          imageFetcher = new WebsocketWrapper(
+            (ws, data) => {
+              ws.send("artwork/0");
+
+              if (data != currentImage) {
+                if (imageUrl) {
+                  URL.revokeObjectURL(imageUrl);
+                  imageUrl = undefined;
+                }
+
+                if (data) {
+                  if (data instanceof Blob) {
+                    imageUrl = URL.createObjectURL(data);
+                  } else {
+                    imageUrl = data;
+                  }
+                }
+
+                currentImage = data;
+              }
+            },
+            350,
+            (data) => !!data
+          );
+        }
+
+        const titleElement = elements["title"];
+        const artistElement = elements["artist"];
+        const albumElement = elements["album"];
+        const statusElement = elements["status"];
+        const barElement = elements["bar"];
+        const barCircleElement = elements["barCircle"];
+        const positionElement = elements["position"];
+        const artElement = elements["art"];
+
         let paused = data?.playbackState == "paused";
         let position = data?.position;
         let metadata = data?.metadata;
@@ -168,47 +259,52 @@
 
         if (artElement) {
           if (art) {
-            let url = art.src;
-
-            artElement.style.backgroundImage = `url("${url}")`;
+            artElement.style.backgroundImage = `url("${imageUrl}")`;
           } else {
             artElement.style.backgroundImage = "";
           }
         }
       }
+    </script>
 
-      function connect() {
-        const ws = new WebSocket("ws://127.0.0.1:32100");
+    <script>
+      function load() {
+        const elements = {
+          title: document.getElementById("np-title"),
+          artist: document.getElementById("np-artist"),
+          album: document.getElementById("np-album"),
+          status: document.getElementById("np-status"),
+          bar: document.getElementById("np-bar"),
+          barCircle: document.getElementById("np-bar-circle"),
+          position: document.getElementById("np-position"),
+          art: document.getElementById("np-art"),
+        };
 
-        let id = setInterval(() => {
+        const ws = new WebsocketWrapper((ws, data) => {
           ws.send(null);
-        }, 500);
-
-        ws.onclose = (e) => {
-          console.log(
-            "Socket is closed. Reconnect will be attempted in 5 seconds. Reason:",
-            e.reason
-          );
-
-          _data = {};
-          clearInterval(id);
-
-          setTimeout(function () {
-            connect();
-          }, 5000);
-        };
-
-        ws.onmessage = (e) => {
-          let data = JSON.parse(e.data);
-          _data = data;
-        };
+          applyStatus(data, elements);
+        }, 250);
       }
 
-      setInterval(() => {
-        parse(_data);
-      }, 250);
-
-      connect();
+      window.addEventListener("load", load);
     </script>
+  </head>
+
+  <body>
+    <div id="nowplaying">
+      <div id="np-info">
+        <div id="np-text">
+          <p><span id="np-title"></span><span id="np-artist"></span></p>
+          <p id="np-album"></p>
+        </div>
+        <div id="np-status" hidden>
+          <div id="np-bar">
+            <div id="np-bar-circle"></div>
+          </div>
+          <p id="np-position"></p>
+        </div>
+      </div>
+      <div id="np-art" />
+    </div>
   </body>
 </html>

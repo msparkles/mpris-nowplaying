@@ -1,8 +1,9 @@
 [package]
 name = "mpris-nowplaying"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 repository = "https://github.com/msparkles/mpris-nowplaying"
+authors = ["Madeline Sparkles (madeline@mouse.lgbt)"]
 description = "A websocket based MPRIS2 \"now-playing\" / status client."
 readme = "README.md"
 license = "MIT"
@@ -13,10 +14,15 @@ keywords = ["dbus", "mpris", "music", "daemon", "web"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-mpris = "2.0.1"
-log = "0.4.19"
-env_logger = "0.10.0"
-clap = { version = "4.3.21", features = ["derive"] }
-tokio-tungstenite = "0.20.0"
-tokio = { version = "1.31.0", features = ["full"] }
-json = "0.12.4"
+log = "0.4"
+env_logger = "0.11"
+
+clap = { version = "4.5", features = ["derive"] }
+
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.26"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+mpris = "2.0"
