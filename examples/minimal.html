@@ -26,7 +26,10 @@
               e.reason
             );
 
-            this.delete();
+            this.ws = undefined;
+            clearInterval(this.intervalId);
+            this.intervalId = undefined;
+            this.data = {};
 
             setTimeout(this.connect, 5000);
           };
@@ -55,13 +58,6 @@
           };
 
           this.ws = ws;
-        }
-
-        delete() {
-          this.ws = undefined;
-          clearInterval(this.intervalId);
-          this.intervalId = undefined;
-          this.data = {};
         }
 
         constructor(
