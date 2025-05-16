@@ -1,41 +1,38 @@
 use clap::Parser;
 use env_logger::Env;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::time::Duration;
 use std::{fs, mem, thread};
 use tokio::sync::watch;
-use tokio_tungstenite::tungstenite::{accept, Message, Utf8Bytes};
+use tokio_tungstenite::tungstenite::{accept, Message};
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + t * (b - a)
 }
 
-/// MPRIS2 status reporter as a WebSocket connection.
+/// MPRIS2 player status proxy as a WebSocket server.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// The starting player-reconnection time, in seconds. Player reconnection interval will be at least this number.
+    /// The starting time between connection attempts, in seconds (floating point).
     #[arg(long, default_value_t = 1.0)]
-    min_retry_time: f32,
+    min_delay: f32,
 
-    /// The maximum player-reconnection time, in seconds. Player reconnection interval will be at most this number.
+    /// The maximum time between connection attempts, in seconds (floating point).
     ///
     /// If this is smaller than min_retry_time, the two will be swapped and a warning will be produced.
     ///
-    /// It will always take 16 retires to get to this point.
+    /// It will always take 16 tries to get to this point.
     #[arg(long, default_value_t = 4.0)]
-    max_retry_time: f32,
-
-    /// Silence the media player. If this is not to be used, use the RUST_LOG environment variables: https://docs.rs/env_logger/latest/env_logger/
-    #[arg(short, long, default_value_t = false)]
-    silent: bool,
+    max_delay: f32,
 
     /// The address the websocket server will bind to.
     #[arg(long, default_value_t = String::from("127.0.0.1:32100"))]
     ip: String,
 
-    /// The minimum status update interval, in seconds.
+    /// The minimum status update interval, in seconds (floating point).
     ///
     /// The updating is lazy, it will only ask for the latest status when a websocket client does.
     ///
@@ -43,9 +40,10 @@ struct Args {
     #[arg(short, long, default_value_t = 0.25)]
     interval: f32,
 
-    /// The app name to look for. Leave blank to search for a player automatically.
-    #[arg(short, long, default_value_t = String::from(""))]
-    app_name: String,
+    /// The app names to filter for with Regex. Only players with names that pass a pattern would be connected to.
+    /// Leave blank to search for any players.
+    #[arg(short, long, default_value = "")]
+    app_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -97,34 +95,56 @@ thread_local! {
     static PLAYER_FINDER: mpris::PlayerFinder = mpris::PlayerFinder::new().expect("could not connect to D-Bus!");
 }
 
+#[derive(Debug)]
+enum PlayerFindResult {
+    NewPlayer(mpris::Player),
+    SamePlayer,
+    NotFound(Duration),
+}
+
 fn find_player(
     times_tried: &mut u32,
-    min_retry_time: f32,
-    max_retry_time: f32,
-    app_name: &str,
+    min_delay: f32,
+    max_delay: f32,
+    app_names: &[Regex],
     current_player: Option<&mpris::Player>,
-) -> Result<mpris::Player, Duration> {
-    let result = if app_name.is_empty() {
-        PLAYER_FINDER.with(|finder| finder.find_active())
-    } else {
-        PLAYER_FINDER.with(|finder| finder.find_by_name(app_name))
-    };
+) -> PlayerFindResult {
+    let mut player = None;
 
-    if let Ok(found) = result {
-        if Some(found.bus_name()) == current_player.map(|v| v.bus_name()) {
-            return Err(Duration::from_secs_f32(min_retry_time));
+    PLAYER_FINDER.with(|finder| {
+        if app_names.is_empty() {
+            player = finder.find_active().ok();
+        } else {
+            for regex in app_names {
+                if let Some(new_player) = finder.iter_players().ok().and_then(|players| {
+                    players
+                        .flatten()
+                        .find(|player| regex.is_match(player.bus_name_player_name_part()))
+                }) {
+                    player = Some(new_player);
+                    break;
+                }
+            }
+        }
+    });
+
+    if let Some(player) = player {
+        if Some(player.bus_name_player_name_part())
+            == current_player.map(|v| v.bus_name_player_name_part())
+        {
+            return PlayerFindResult::SamePlayer;
         }
 
-        return Ok(found);
+        return PlayerFindResult::NewPlayer(player);
     }
 
     let times_normalized = (*times_tried).min(16) as f32 / 16.0;
-    let try_again_time = lerp(min_retry_time, max_retry_time, times_normalized);
+    let try_again_time = lerp(min_delay, max_delay, times_normalized);
 
     *times_tried = times_tried.saturating_add(1);
-    log::info!("Could not find a currently playing media player. Been trying for {} time(s). Trying again in {try_again_time} seconds.", times_tried);
+    log::info!("Could not find a currently playing media player. Been trying for {times_tried} time(s). Trying again in {try_again_time} seconds.");
 
-    Err(Duration::from_secs_f32(try_again_time))
+    PlayerFindResult::NotFound(Duration::from_secs_f32(try_again_time))
 }
 
 fn read_status(player: &mpris::Player) -> Option<PlayerStatus> {
@@ -151,82 +171,98 @@ fn read_status(player: &mpris::Player) -> Option<PlayerStatus> {
 fn handle_status_request(
     player: Option<&mpris::Player>,
     status_tx: &mut watch::Sender<Option<PlayerStatus>>,
-) -> bool {
+) -> Result<(), ()> {
     let Some(player) = player else {
-        return false;
+        return Ok(());
     };
 
     if let Some(status) = read_status(player) {
         log::debug!(
-            "Updated from player {}.",
-            player.bus_name_player_name_part()
+            "Updated from player \"{} ({})\".",
+            player.bus_name_player_name_part(),
+            player.bus_name()
         );
 
         if status_tx.send(Some(status)).is_err() {
-            log::info!("Player status isn't being requested anymore(all connections dropped)! Pausing updates.");
+            log::info!("Player status isn't being requested anymore! (All connections have dropped)\nPausing updates.");
 
-            return true;
+            return Err(());
         }
     } else {
         status_tx.send(None).unwrap();
-        log::info!("Could not read player status...");
+        log::info!("Could not read player status.");
 
         if !player.is_running() {
-            log::info!("Player is not running! Aborting updates.");
+            log::info!("Player is not running! Detaching.");
 
-            return true;
+            return Err(());
         }
     }
 
-    false
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    let mut args = Args::parse();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    {
-        if args.min_retry_time <= 0.0 {
+    let args = {
+        let mut args = Args::parse();
+
+        if args.min_delay <= 0.0 {
             log::error!(
                 "min_retry_time cannot be less than or equal to zero! Setting back to default."
             );
-            args.min_retry_time = 1.0;
+            args.min_delay = 1.0;
         }
 
-        if args.max_retry_time <= 0.0 {
+        if args.max_delay <= 0.0 {
             log::error!(
                 "max_retry_time cannot be less than or equal to zero! Setting back to default."
             );
-            args.max_retry_time = 4.0;
+            args.max_delay = 4.0;
         }
 
         if args.interval <= 0.0 {
             log::error!("interval cannot be less than or equal to zero! Setting back to default.");
-            args.max_retry_time = 0.25;
+            args.max_delay = 0.25;
         }
 
-        if args.max_retry_time < args.min_retry_time {
-            log::warn!("max_retry_time({}) is smaller than min_retry_time({})! Proceeding to swap the two.", args.max_retry_time, args.min_retry_time);
+        if args.max_delay < args.min_delay {
+            log::warn!("max_retry_time({}) is smaller than min_retry_time({})! Proceeding to swap the two.", args.max_delay, args.min_delay);
 
-            mem::swap(&mut args.min_retry_time, &mut args.max_retry_time);
+            mem::swap(&mut args.min_delay, &mut args.max_delay);
         }
-    }
 
-    {
-        let mut env = Env::default();
-        if !args.silent {
-            env = env.default_filter_or("info");
-        }
-        env_logger::Builder::from_env(env).init();
-    }
+        args
+    };
 
     let (status_tx, status_rx) = watch::channel::<Option<PlayerStatus>>(None);
 
     {
-        let min_retry_time = args.min_retry_time;
-        let max_retry_time = args.max_retry_time;
-        let app_name = args.app_name;
+        let min_delay = args.min_delay;
+        let max_delay = args.max_delay;
         let update_interval = Duration::from_secs_f32(args.interval);
+
+        let app_name = {
+            let names = args.app_names;
+
+            if names.is_empty() {
+                vec![]
+            } else {
+                names
+                    .into_iter()
+                    .flat_map(|name| match Regex::new(&name) {
+                        Ok(v) => Some(v),
+                        Err(err) => {
+                            log::error!("Could not parse regex!\nError: {err}");
+
+                            None
+                        }
+                    })
+                    .collect()
+            }
+        };
 
         thread::spawn(move || {
             let mut status_tx = status_tx;
@@ -235,30 +271,33 @@ async fn main() {
             let mut times_tried = 0;
 
             loop {
-                if handle_status_request(player.as_ref(), &mut status_tx) {
+                if handle_status_request(player.as_ref(), &mut status_tx).is_err() {
                     player = None;
+                    times_tried = 0;
                 };
 
                 match find_player(
                     &mut times_tried,
-                    min_retry_time,
-                    max_retry_time,
+                    min_delay,
+                    max_delay,
                     &app_name,
                     player.as_ref(),
                 ) {
-                    Ok(new_player) => {
+                    PlayerFindResult::NewPlayer(new_player) => {
                         log::info!(
                             "Found new player \"{} ({})\"!",
                             new_player.bus_name_player_name_part(),
                             new_player.bus_name()
                         );
+
                         player = Some(new_player);
-                        times_tried = 0;
                     }
-                    Err(duration) => {
-                        if player.is_none() {
-                            thread::sleep(duration);
-                        }
+                    PlayerFindResult::NotFound(duration) => {
+                        thread::sleep(duration);
+                        continue;
+                    }
+                    PlayerFindResult::SamePlayer => {
+                        log::debug!("Found the same player! Skipping.");
                     }
                 }
 
@@ -283,56 +322,67 @@ async fn main() {
             };
 
             if let Ok(mut ws_stream) = accept(stream) {
-                let status_rx = status_rx.clone();
+                let mut status_rx = status_rx.clone();
 
                 tokio::spawn(async move {
                     let mut current_artwork = None;
 
                     loop {
                         let Ok(msg) = ws_stream.read() else {
+                            drop(ws_stream);
                             break;
                         };
 
-                        if let Ok(req) = msg.into_text().as_ref().map(Utf8Bytes::as_str) {
-                            if let Some(status) = status_rx.borrow().as_ref() {
-                                if let Some(artwork_index) = req.strip_prefix("artwork/") {
-                                    let Ok(index) = str::parse::<usize>(artwork_index) else {
-                                        continue;
-                                    };
+                        let Ok(req) = msg.to_text() else {
+                            continue;
+                        };
 
-                                    if let Some(artwork) = status.metadata.artwork.get(index) {
-                                        if Some(artwork) != current_artwork.as_ref() {
-                                            current_artwork = Some(artwork.clone());
+                        let status = status_rx.borrow_and_update();
+                        let Some(status) = status.as_ref() else {
+                            continue;
+                        };
 
-                                            if let Some(path) =
-                                                artwork.src.as_str().strip_prefix("file://")
-                                            {
-                                                let _ = ws_stream.send(Message::Binary(
-                                                    fs::read(path).unwrap().into(),
-                                                ));
+                        let replied = (|| {
+                            if let Some(artwork_index) = req.strip_prefix("artwork/") {
+                                let Ok(index) = str::parse::<usize>(artwork_index) else {
+                                    return false;
+                                };
 
-                                                continue;
-                                            } else {
-                                                let _ = ws_stream.send(Message::Text(
-                                                    artwork.src.clone().into(),
-                                                ));
-                                                continue;
-                                            }
-                                        } else {
-                                            let _ = ws_stream.send(Message::Text("null".into()));
-                                            continue;
-                                        }
-                                    }
+                                let Some(artwork) = status.metadata.artwork.get(index) else {
+                                    return false;
+                                };
+
+                                if Some(artwork) == current_artwork.as_ref() {
+                                    return false;
+                                }
+
+                                current_artwork = Some(artwork.clone());
+
+                                if let Some(path) = artwork.src.as_str().strip_prefix("file://") {
+                                    let _ = ws_stream
+                                        .send(Message::Binary(fs::read(path).unwrap().into()));
                                 } else {
-                                    let _ = ws_stream.send(Message::Text(
-                                        serde_json::to_string(&status).unwrap().into(),
-                                    ));
-                                    continue;
+                                    let _ =
+                                        ws_stream.send(Message::Text(artwork.src.clone().into()));
                                 }
                             } else {
-                                let _ = ws_stream.send(Message::Text("null".into()));
-                                continue;
+                                let _ = ws_stream.send(Message::Text(
+                                    serde_json::to_string(&status).unwrap().into(),
+                                ));
                             }
+
+                            true
+                        })();
+
+                        if replied {
+                            log::debug!(
+                                "Responded to WS!\n    Request: {req}\n    Status: {status:?}\n"
+                            );
+                        } else {
+                            log::debug!(
+                                "Didn't respond to WS!\n    Request: {req}\n    Status: {status:?}\n"
+                            );
+                            let _ = ws_stream.send(Message::Text("null".into()));
                         }
                     }
                 });
