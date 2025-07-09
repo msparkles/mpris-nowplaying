@@ -339,6 +339,8 @@ async fn main() {
 
                         let status = status_rx.borrow_and_update();
                         let Some(status) = status.as_ref() else {
+                            let _ = ws_stream.send(Message::Text("null".into()));
+
                             continue;
                         };
 
@@ -382,7 +384,7 @@ async fn main() {
                             log::debug!(
                                 "Didn't respond to WS!\n    Request: {req}\n    Status: {status:?}\n"
                             );
-                            let _ = ws_stream.send(Message::Text("null".into()));
+                            let _ = ws_stream.send(Message::Text("".into()));
                         }
                     }
                 });

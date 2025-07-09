@@ -1,325 +1,361 @@
 <!DOCTYPE html>
 <html lang="en-US">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <script>
-      const ADDRESS = "ws://127.0.0.1:32100";
+        <script>
+            const ADDRESS = "ws://127.0.0.1:32100";
 
-      class WebsocketWrapper {
-        ws = undefined;
-        data = null;
+            function connect(wrapper) {
+                const ws = new WebSocket(ADDRESS);
 
-        interval = undefined;
-        intervalId = undefined;
+                ws.onopen = (e) => {
+                    console.log("Socket opened.");
 
-        update;
-        filter;
+                    wrapper.open();
+                };
 
-        connect() {
-          const ws = new WebSocket(ADDRESS);
+                ws.onerror = (e) => {
+                    console.log(
+                        "Socket errored. Reconnect will be attempted in 5 seconds. Reason:",
+                        e.reason
+                    );
 
-          ws.onclose = (e) => {
-            console.log(
-              "Socket is closed. Reconnect will be attempted in 5 seconds. Reason:",
-              e.reason
-            );
+                    wrapper.reset();
+                };
 
-            this.ws = undefined;
-            clearInterval(this.intervalId);
-            this.intervalId = undefined;
-            this.data = {};
+                ws.onclose = (e) => {
+                    console.log(
+                        "Socket closed. Reconnect will be attempted in 5 seconds. Reason:",
+                        e.reason
+                    );
 
-            setTimeout(this.connect, 5000);
-          };
+                    wrapper.reset();
+                };
 
-          ws.onmessage = (e) => {
-            if (!e.data) {
-              this.data = null;
-              return;
+                ws.onmessage = (e) => {
+                    console.debug("Message received.");
+
+                    let data = null;
+                    if (typeof e.data == "object") {
+                        data = e.data;
+                    } else if (e.data === "") {
+                        data = undefined;
+                    } else {
+                        try {
+                            data = JSON.parse(e.data);
+                        } catch {
+                            data = e.data;
+                        }
+                    }
+
+                    wrapper.data = data;
+                };
+
+                wrapper.ws = ws;
             }
 
-            let data = null;
+            class WebsocketWrapper {
+                ws = undefined;
+                data = null;
 
-            if (typeof e.data == "object") {
-              data = e.data;
-            } else {
-              try {
-                data = JSON.parse(e.data);
-              } catch {
-                data = e.data;
-              }
-            }
+                interval = undefined;
+                intervalId = undefined;
 
-            if (this.filter(data)) {
-              this.data = data;
-            }
-          };
+                update;
 
-          this.ws = ws;
-        }
+                reset() {
+                    this.ws = undefined;
+                    this.data = null;
 
-        constructor(
-          update = (ws, data) => {},
-          interval = 1000,
-          filter = (data) => true
-        ) {
-          this.update = update;
-          this.filter = filter;
-          this.interval = interval;
+                    clearInterval(this.intervalId);
+                    this.intervalId = undefined;
 
-          this.intervalId = setInterval(() => {
-            if (this.ws?.readyState === WebSocket.OPEN) {
-              this.update(this.ws, this.data);
-            }
-          }, this.interval);
+                    this.update(this.ws, this.data);
 
-          this.connect();
-        }
-      }
-    </script>
-
-    <script>
-      let imageFetcher = undefined;
-      let imageUrl = undefined;
-      let currentImage = undefined;
-
-      function applyStatus(data, elements) {
-        if (!imageFetcher) {
-          imageFetcher = new WebsocketWrapper(
-            (ws, data) => {
-              ws.send("artwork/0");
-
-              if (data != currentImage) {
-                if (imageUrl) {
-                  URL.revokeObjectURL(imageUrl);
-                  imageUrl = undefined;
+                    setTimeout(() => connect(this), 5000);
                 }
 
-                if (data) {
-                  if (data instanceof Blob) {
-                    imageUrl = URL.createObjectURL(data);
-                  } else {
-                    imageUrl = data;
-                  }
+                open() {
+                    this.intervalId = setInterval(() => {
+                        if (this.ws?.readyState === WebSocket.OPEN) {
+                            this.update(this.ws, this.data);
+                        }
+                    }, this.interval);
                 }
+
+                constructor(update = (ws, data) => {}, interval = 1000) {
+                    this.update = update;
+                    this.interval = interval;
+
+                    connect(this);
+                }
+            }
+        </script>
+
+        <script>
+            let currentImage = undefined;
+            let currentImageUrl = undefined;
+            let currentImageUrlCss = "";
+
+            const imageFetcher = new WebsocketWrapper((ws, data) => {
+                ws?.send("artwork/0");
 
                 currentImage = data;
-              }
-            },
-            350,
-            (data) => !!data
-          );
-        }
+            }, 250);
 
-        const titleElement = elements["title"];
-        const artistElement = elements["artist"];
-        const albumElement = elements["album"];
-        const statusElement = elements["status"];
-        const barElement = elements["bar"];
-        const barCircleElement = elements["barCircle"];
-        const positionElement = elements["position"];
-        const artElement = elements["art"];
+            function applyStatus(data, elements) {
+                if (currentImage) {
+                    if (currentImageUrl) {
+                        try {
+                            URL.revokeObjectURL(currentImageUrl);
+                        } catch {}
 
-        let paused = data?.playbackState == "paused";
-        let position = data?.position;
-        let metadata = data?.metadata;
+                        currentImageUrl = undefined;
+                    }
 
-        let title = metadata?.title;
-        let artist = metadata?.artist;
-        let album = metadata?.album;
-        let length = metadata?.length;
-        let art = metadata?.artwork?.at(0);
+                    if (currentImage instanceof Blob) {
+                        currentImageUrl = URL.createObjectURL(currentImage);
+                    } else {
+                        currentImageUrl = currentImage;
+                    }
 
-        if (titleElement) {
-          if (title) {
-            titleElement.textContent = title;
-          } else {
-            titleElement.textContent = "Nothing playing!";
-          }
-        }
+                    currentImageUrlCss = `url("${currentImageUrl}")`;
+                } else if (currentImage === null) {
+                    currentImageUrlCss = "";
+                }
 
-        if (artistElement) {
-          if (artist) {
-            artistElement.textContent = `${artist}`;
-          } else {
-            artistElement.textContent = "";
-          }
-        }
+                const titleElement = elements["title"];
+                const artistElement = elements["artist"];
+                const albumElement = elements["album"];
+                const statusElement = elements["status"];
+                const barElement = elements["bar"];
+                const barCircleElement = elements["barCircle"];
+                const positionElement = elements["position"];
+                const artElement = elements["art"];
 
-        if (albumElement) {
-          if (album) {
-            albumElement.textContent = `${album}`;
-          } else {
-            albumElement.textContent = "";
-          }
-        }
+                const paused = data?.playbackState == "paused";
+                const position = data?.position;
+                const metadata = data?.metadata;
 
-        if (statusElement && barElement && barCircleElement) {
-          if (position && length) {
-            let posPercentage = (position / length) * 100.0;
+                let title = metadata?.title;
+                if (!title) {
+                    title = "Nothing playing!";
+                }
 
-            statusElement.hidden = false;
-            barCircleElement.style.left = `${posPercentage}%`;
-          } else {
-            statusElement.hidden = true;
-            barCircleElement.style.left = "0.0%";
-          }
-        }
+                const artist = metadata?.artist ?? "";
+                const album = metadata?.album ?? "";
+                const art = metadata?.artwork?.at(0) ?? "";
+                const length = metadata?.length;
 
-        if (positionElement) {
-          if (position && length) {
-            let posSeconds = (Math.round(position / 1_000_000) % 60)
-              .toString()
-              .padStart(2, "0");
-            let posMinutes = Math.floor(position / 1_000_000 / 60);
-            let lenSeconds = (Math.round(length / 1_000_000) % 60)
-              .toString()
-              .padStart(2, "0");
-            let lenMinutes = Math.floor(length / 1_000_000 / 60);
+                if (titleElement) {
+                    if (titleElement.textContent !== title) {
+                        titleElement.textContent = title;
+                    }
+                }
 
-            var paused_text = "";
-            if (paused) {
-              paused_text = " (Paused!)";
+                if (artistElement) {
+                    if (artistElement.textContent !== artist) {
+                        artistElement.textContent = artist;
+                    }
+                }
+
+                if (albumElement) {
+                    if (albumElement.textContent !== album) {
+                        albumElement.textContent = album;
+                    }
+                }
+
+                if (artElement) {
+                    if (
+                        artElement.style.backgroundImage !== currentImageUrlCss
+                    ) {
+                        artElement.style.backgroundImage = currentImageUrlCss;
+                    }
+                }
+
+                if (statusElement) {
+                    if (length !== undefined && length > 0) {
+                        if (statusElement.hidden !== false) {
+                            statusElement.hidden = false;
+                        }
+
+                        if (barCircleElement) {
+                            let pos = "0.0%";
+
+                            if (position !== undefined) {
+                                const posPercentage =
+                                    (position / length) * 100.0;
+
+                                pos = `${posPercentage}%`;
+                            }
+
+                            if (barCircleElement.style.left !== pos) {
+                                barCircleElement.style.left = pos;
+                            }
+                        }
+
+                        if (positionElement) {
+                            let progressText = "";
+
+                            if (position !== undefined) {
+                                const posSeconds = (
+                                    Math.round(position / 1_000_000) % 60
+                                )
+                                    .toString()
+                                    .padStart(2, "0");
+                                const posMinutes = Math.floor(
+                                    position / 1_000_000 / 60
+                                );
+                                const lenSeconds = (
+                                    Math.round(length / 1_000_000) % 60
+                                )
+                                    .toString()
+                                    .padStart(2, "0");
+                                const lenMinutes = Math.floor(
+                                    length / 1_000_000 / 60
+                                );
+
+                                let paused_text = "";
+                                if (paused) {
+                                    paused_text = " (Paused!)";
+                                }
+
+                                progressText = `${posMinutes}:${posSeconds} / ${lenMinutes}:${lenSeconds}${paused_text}`;
+                            }
+
+                            if (positionElement.textContent !== progressText) {
+                                positionElement.textContent = progressText;
+                            }
+                        }
+                    } else {
+                        if (statusElement.hidden !== true) {
+                            statusElement.hidden = true;
+                        }
+                    }
+                }
+            }
+        </script>
+
+        <script>
+            function load() {
+                const elements = {
+                    title: document.getElementById("np-title"),
+                    artist: document.getElementById("np-artist"),
+                    album: document.getElementById("np-album"),
+                    status: document.getElementById("np-status"),
+                    bar: document.getElementById("np-bar"),
+                    barCircle: document.getElementById("np-bar-circle"),
+                    position: document.getElementById("np-position"),
+                    art: document.getElementById("np-art"),
+                };
+
+                const ws = new WebsocketWrapper((ws, data) => {
+                    ws?.send(null);
+                    applyStatus(data, elements);
+                }, 250);
             }
 
-            positionElement.textContent =
-              `${posMinutes}:${posSeconds} / ${lenMinutes}:${lenSeconds}` +
-              paused_text;
-          } else {
-            positionElement.textContent = "";
-          }
-        }
+            document.addEventListener("DOMContentLoaded", load);
+        </script>
 
-        if (artElement) {
-          if (art) {
-            artElement.style.backgroundImage = `url("${imageUrl}")`;
-          } else {
-            artElement.style.backgroundImage = "";
-          }
-        }
-      }
-    </script>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
 
-    <script>
-      function load() {
-        const elements = {
-          title: document.getElementById("np-title"),
-          artist: document.getElementById("np-artist"),
-          album: document.getElementById("np-album"),
-          status: document.getElementById("np-status"),
-          bar: document.getElementById("np-bar"),
-          barCircle: document.getElementById("np-bar-circle"),
-          position: document.getElementById("np-position"),
-          art: document.getElementById("np-art"),
-        };
+            :root {
+                font-size: 24px;
+                margin: 0;
+                padding: 0;
+            }
 
-        const ws = new WebsocketWrapper((ws, data) => {
-          ws.send(null);
-          applyStatus(data, elements);
-        }, 250);
-      }
+            body {
+                margin: 0;
+                padding: 0;
+            }
 
-      window.addEventListener("load", load);
-    </script>
+            #nowplaying {
+                width: 100vw;
+                height: 100vh;
 
-    <style>
-      * {
-        box-sizing: border-box;
-      }
+                display: flex;
+            }
 
-      :root {
-        font-size: 24px;
-        margin: 0;
-        padding: 0;
-      }
+            #np-info {
+                width: 50%;
 
-      body {
-        margin: 0;
-        padding: 0;
-      }
+                display: flex;
+                flex-direction: column;
 
-      #nowplaying {
-        width: 100vw;
-        height: 100vh;
+                padding: 8px;
+                margin-right: 8px;
+            }
 
-        display: flex;
-      }
+            #np-text {
+                text-align: center;
+                height: 100%;
+            }
 
-      #np-info {
-        width: 50%;
+            #np-bar {
+                width: 100%;
+                padding-top: 2px;
+                margin-block: 6px;
+                height: 10px;
+                position: relative;
+            }
 
-        display: flex;
-        flex-direction: column;
+            #np-bar-background {
+                width: 100%;
+                height: 100%;
+                background-color: rgb(255, 255, 255);
+                border: solid 3px rgb(70, 65, 83);
+                border-radius: 8px;
+                position: absolute;
+            }
 
-        padding: 8px;
-        margin-right: 8px;
-      }
+            #np-bar-circle {
+                left: 0;
+                top: 0;
+                transform: translateX(-50%);
+                width: 8px;
+                height: 8px;
+                background-color: rgb(248, 175, 175);
+                border: solid 3px rgb(255, 134, 134);
+                border-radius: 50%;
+                box-sizing: content-box;
+                position: absolute;
+            }
 
-      #np-text {
-        text-align: center;
-        height: 100%;
-      }
+            #np-art {
+                width: 50%;
+                opacity: 0.5;
 
-      #np-bar {
-        width: 100%;
-        padding-top: 2px;
-        margin-block: 6px;
-        height: 10px;
-        position: relative;
-      }
-
-      #np-bar-background {
-        width: 100%;
-        height: 100%;
-        background-color: rgb(255, 255, 255);
-        border: solid 3px rgb(70, 65, 83);
-        border-radius: 8px;
-        position: absolute;
-      }
-
-      #np-bar-circle {
-        left: 0;
-        top: 0;
-        transform: translateX(-50%);
-        width: 8px;
-        height: 8px;
-        background-color: rgb(248, 175, 175);
-        border: solid 3px rgb(255, 134, 134);
-        border-radius: 50%;
-        box-sizing: content-box;
-        position: absolute;
-      }
-
-      #np-art {
-        width: 50%;
-        opacity: 0.5;
-
-        background-size: contain;
-        background-repeat: no-repeat;
-        background-position: center;
-      }
-    </style>
-    <title>MPRIS Now-playing</title>
-  </head>
-  <body>
-    <div id="nowplaying">
-      <div id="np-info">
-        <div id="np-text">
-          <h3 id="np-title"></h3>
-          <i id="np-album"></i>
-          <p id="np-artist"></p>
+                background-size: contain;
+                background-repeat: no-repeat;
+                background-position: center;
+            }
+        </style>
+        <title>MPRIS Now-playing</title>
+    </head>
+    <body>
+        <div id="nowplaying">
+            <div id="np-info">
+                <div id="np-text">
+                    <h3 id="np-title"></h3>
+                    <i id="np-album"></i>
+                    <p id="np-artist"></p>
+                </div>
+                <div id="np-status" hidden>
+                    <div id="np-bar">
+                        <div id="np-bar-background"></div>
+                        <div id="np-bar-circle"></div>
+                    </div>
+                    <div id="np-position"></div>
+                </div>
+            </div>
+            <div id="np-art" />
         </div>
-        <div id="np-status" hidden>
-          <div id="np-bar">
-            <div id="np-bar-background"></div>
-            <div id="np-bar-circle"></div>
-          </div>
-          <div id="np-position"></div>
-        </div>
-      </div>
-      <div id="np-art" />
-    </div>
-  </body>
+    </body>
 </html>
