@@ -18,7 +18,7 @@
 
                 ws.onerror = (e) => {
                     console.log(
-                        "Socket errored. Reconnect will be attempted in 5 seconds. Reason:",
+                        "Socket errored. Reconnect will be attempted in 1 second. Reason:",
                         e.reason
                     );
 
@@ -27,7 +27,7 @@
 
                 ws.onclose = (e) => {
                     console.log(
-                        "Socket closed. Reconnect will be attempted in 5 seconds. Reason:",
+                        "Socket closed. Reconnect will be attempted in 1 second. Reason:",
                         e.reason
                     );
 
@@ -35,8 +35,6 @@
                 };
 
                 ws.onmessage = (e) => {
-                    console.debug("Message received.");
-
                     let data = null;
                     if (typeof e.data == "object") {
                         data = e.data;
@@ -66,15 +64,15 @@
                 update;
 
                 reset() {
-                    this.ws = undefined;
-                    this.data = null;
-
                     clearInterval(this.intervalId);
                     this.intervalId = undefined;
 
+                    this.ws = undefined;
+                    this.data = null;
+
                     this.update(this.ws, this.data);
 
-                    setTimeout(() => connect(this), 5000);
+                    setTimeout(() => connect(this), 1000);
                 }
 
                 open() {
@@ -95,17 +93,10 @@
         </script>
 
         <script>
-            let currentImage = undefined;
             let currentImageUrl = undefined;
             let currentImageUrlCss = "";
 
-            const imageFetcher = new WebsocketWrapper((ws, data) => {
-                ws?.send("artwork/0");
-
-                currentImage = data;
-            }, 250);
-
-            function applyStatus(data, elements) {
+            function applyStatus(data, elements, currentImage) {
                 if (currentImage) {
                     if (currentImageUrl) {
                         try {
@@ -142,10 +133,24 @@
                 let title = metadata?.title;
                 if (!title) {
                     title = "Nothing playing!";
+                } else {
+                    title = `“${title}”`;
                 }
 
-                const artist = metadata?.artist ?? "";
-                const album = metadata?.album ?? "";
+                let album = metadata?.album;
+                if (!album) {
+                    album = "";
+                } else {
+                    album = `on ‘${album}’`;
+                }
+
+                let artist = metadata?.artist;
+                if (!artist) {
+                    artist = "";
+                } else {
+                    artist = `by ${artist}`;
+                }
+
                 const art = metadata?.artwork?.at(0) ?? "";
                 const length = metadata?.length;
 
@@ -251,9 +256,17 @@
                     art: document.getElementById("np-art"),
                 };
 
+                let currentImage = undefined;
+                const imageFetcher = new WebsocketWrapper((ws, data) => {
+                    ws?.send("artwork/0");
+
+                    currentImage = data;
+                }, 250);
+
                 const ws = new WebsocketWrapper((ws, data) => {
                     ws?.send(null);
-                    applyStatus(data, elements);
+
+                    applyStatus(data, elements, currentImage);
                 }, 250);
             }
 
